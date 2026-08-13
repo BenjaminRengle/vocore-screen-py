@@ -1,9 +1,11 @@
 from copy import deepcopy
 
+import numpy
 import usb.core
 import usb.legacy
+from PIL import Image
 
-from .image import Image
+from .image import Image as FrameBuffer
 
 VENDOR = 0xC872
 PRODUCT = 0x1004
@@ -18,7 +20,7 @@ class VocoreScreen:
         self.legacy_device_handle = usb.legacy.Device(self.device).open()
         # wakeup screen
         self._wakeup()
-        self.buffer = Image()
+        self.buffer = FrameBuffer()
         self.clear(blit=True)
 
     def get_last_touch_event(self):
@@ -228,3 +230,28 @@ class VocoreScreen:
         """
         cmd = [0x00, 0x29]
         self.device.ctrl_transfer(0x40, 0xB0, 0, 0, cmd, 100)
+
+    def draw_image(self, image: Image.Image, blit=True):
+        """
+        Draw a Pillow image to the internal framebuffer.
+
+        image must be 800x480.
+        """
+
+        if image.size != (800, 480):
+            image = image.resize((800, 480))
+
+        image = image.convert("RGB")
+
+        # RGB888 -> RGB565, vectorized. The device buffer is column-major
+        # (x outer, y inner, 2 little-endian bytes per pixel - see
+        # FrameBuffer.get_pixel_addr), so transpose the row-major (H, W)
+        # array from PIL before flattening to bytes.
+        arr = numpy.asarray(image, dtype=numpy.uint16)
+        r, g, b = arr[..., 0], arr[..., 1], arr[..., 2]
+        rgb565 = (((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3)).astype("<u2")
+
+        self.buffer.buffer = bytearray(rgb565.T.tobytes())
+
+        if blit:
+            self.blit()
